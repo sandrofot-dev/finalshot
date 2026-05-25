@@ -51,7 +51,7 @@ export async function POST(req: Request) {
     const bytes = await f.arrayBuffer();
     const buffer = Buffer.from(bytes);
     const uploadId = newId();
-    const dir = path.join(process.cwd(), ".tmp", "uploads");
+    const dir = path.join("/tmp", "uploads");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, `${uploadId}.${ext}`), buffer);
 
