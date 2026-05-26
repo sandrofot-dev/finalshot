@@ -6,7 +6,11 @@ import {
   checkTrainingJob,
   submitGenerationJob,
   checkGenerationJob,
+  upscaleImages,
 } from "@/app/lib/generate";
+
+// Allow up to 60 s for this route (covers parallel clarity-upscaler calls)
+export const maxDuration = 60;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/job  — create a new job (training or direct generation)
@@ -154,18 +158,26 @@ export async function GET(req: Request) {
         const result = await checkGenerationJob(job.falRequestId);
 
         if (result.status === "done" || result.status === "error") {
-          const resultUrls = result.status === "done" ? result.resultUrls : undefined;
+          let finalUrls = result.status === "done" ? result.resultUrls : undefined;
+
+          // ── Post-processing: clarity upscaler for sharpness + skin detail ──
+          // Runs in parallel for all images (~15-20 s total). Falls back to
+          // the raw FLUX URLs on timeout or error — never blocks the response.
+          if (finalUrls && finalUrls.length > 0) {
+            finalUrls = await upscaleImages(finalUrls);
+          }
+
           await prisma.job.update({
             where: { id: jobId },
             data: {
               status: result.status,
               progress: result.progress,
-              resultUrls: resultUrls ? JSON.stringify(resultUrls) : null,
+              resultUrls: finalUrls ? JSON.stringify(finalUrls) : null,
             },
           });
           return NextResponse.json({
             success: true,
-            job: { ...formatJob(job), status: result.status, progress: result.progress, resultUrls },
+            job: { ...formatJob(job), status: result.status, progress: result.progress, resultUrls: finalUrls },
           });
         }
 

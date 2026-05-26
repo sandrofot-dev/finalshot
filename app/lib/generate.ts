@@ -122,11 +122,11 @@ export async function submitGenerationJob(
       fal.queue.submit(GEN_MODEL, {
         input: {
           prompt,
-          loras: [{ path: loraUrl, scale: 1.0 }],   // 1.0 = max face fidelity
+          loras: [{ path: loraUrl, scale: 0.85 }],  // 0.85 = safe, no distortion
           num_images: 1,
           image_size: "portrait_4_3",                // 768×1024 portrait
-          num_inference_steps: 40,                   // was 28 — more detail
-          guidance_scale: 7.0,                       // was 3.5 — THIS fixes the blur
+          num_inference_steps: 35,                   // good balance of quality/speed
+          guidance_scale: 4.5,                       // FLUX sweet spot — no distortion
           seed,
           enable_safety_checker: false,
         },
@@ -135,6 +135,45 @@ export async function submitGenerationJob(
   );
 
   return JSON.stringify(results.map((r) => r.request_id));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST-PROCESSING: Clarity Upscaler (sharpness + skin texture + hair detail)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function upscaleImages(urls: string[]): Promise<string[]> {
+  return Promise.all(urls.map(upscaleOne));
+}
+
+async function upscaleOne(imageUrl: string): Promise<string> {
+  const TIMEOUT_MS = 45_000; // 45-second safety per image
+
+  const upscalePromise = (async () => {
+    const result = await fal.subscribe("fal-ai/clarity-upscaler", {
+      input: {
+        image_url: imageUrl,
+        upscale_factor: 2,       // 768×1024 → 1536×2048
+        creativity: 0.12,        // very low — preserve the person's face
+        resemblance: 2.0,        // high — keep identity intact (0-3 scale)
+        guidance_scale: 4.0,
+        num_inference_steps: 18,
+        enable_safety_checker: false,
+      },
+      logs: false,
+    });
+    const data = result.data as { image?: { url: string } };
+    return data.image?.url ?? imageUrl;
+  })();
+
+  const timeoutPromise = new Promise<string>((resolve) =>
+    setTimeout(() => resolve(imageUrl), TIMEOUT_MS) // fallback to original
+  );
+
+  try {
+    return await Promise.race([upscalePromise, timeoutPromise]);
+  } catch {
+    return imageUrl; // fallback to original on any error
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

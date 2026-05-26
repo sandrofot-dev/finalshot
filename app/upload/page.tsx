@@ -708,16 +708,26 @@ export default function UploadPage() {
               /* Generation in progress */
               <div>
                 <h2 className="text-xl font-semibold">
-                  {genPhase === "training" ? "Treinando IA no seu rosto…" : "Gerando seus headshots…"}
+                  {genPhase === "training"
+                    ? "Treinando IA no seu rosto…"
+                    : genProgress >= 99
+                      ? "Aprimorando qualidade…"
+                      : "Gerando seus headshots…"}
                 </h2>
                 <p className="text-gray-400 text-sm mt-1">
                   {genPhase === "training"
                     ? "A IA está personalizando o modelo com o seu rosto."
-                    : <>Criando 4 versões com o estilo &ldquo;{selectedBgObj.title}&rdquo;.</>}
+                    : genProgress >= 99
+                      ? "Adicionando nitidez, textura de pele e detalhes finais."
+                      : <>Criando 6 versões com o estilo &ldquo;{selectedBgObj.title}&rdquo;.</>}
                 </p>
                 <div className="mt-5 mx-auto max-w-xs">
                   <div className="flex items-center justify-between text-xs text-gray-400 mb-1.5">
-                    <span>{genPhase === "generating" ? "Geração" : "Progresso"}</span>
+                    <span>
+                      {genPhase === "training" ? "Treinamento"
+                        : genProgress >= 99 ? "✦ Aprimoramento final"
+                        : "Geração"}
+                    </span>
                     <span>{genProgress}%</span>
                   </div>
                   <div className="h-2 w-full rounded-full bg-gray-800 overflow-hidden">
@@ -726,11 +736,13 @@ export default function UploadPage() {
                       style={{ width: `${genProgress}%` }}
                     />
                   </div>
-                  {genPhase === "training" && (
-                    <p className="mt-3 text-xs text-gray-500">
-                      Isso pode levar ~15 minutos. Deixe esta aba aberta.
-                    </p>
-                  )}
+                  <p className="mt-3 text-xs text-gray-500">
+                    {genPhase === "training"
+                      ? "Isso pode levar ~15 minutos. Deixe esta aba aberta."
+                      : genProgress >= 99
+                        ? "Últimos retoques de IA para máxima qualidade…"
+                        : "Geração em paralelo · resultados aparecem em instantes."}
+                  </p>
                 </div>
               </div>
             )}
