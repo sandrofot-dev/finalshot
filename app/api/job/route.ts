@@ -1,76 +1,74 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { requireSession } from "@/app/lib/session";
-import { submitHeadshotJob, checkHeadshotJob } from "@/app/lib/generate";
+import {
+  submitTrainingJob,
+  checkTrainingJob,
+  submitGenerationJob,
+  checkGenerationJob,
+} from "@/app/lib/generate";
 
-type JobStatus = "queued" | "processing" | "done" | "error";
-
-const MOCKS: Record<string, string[]> = {
-  corporativo:  ["/mock/corporativo-1.png", "/mock/corporativo-2.jpg", "/mock/corporativo-3.jpg", "/mock/corporativo-4.jpg"],
-  startup:      ["/mock/startup-1.jpg",     "/mock/startup-2.jpg",     "/mock/startup-3.jpg",     "/mock/startup-4.jpg"],
-  empresa:      ["/mock/empresa-1.jpg",     "/mock/empresa-2.jpg",     "/mock/empresa-3.jpg",     "/mock/empresa-4.jpg"],
-  executivo:    ["/mock/executivo-1.jpg",   "/mock/executivo-2.jpg",   "/mock/executivo-3.jpg",   "/mock/executivo-4.jpg"],
-  minimalista:  ["/mock/minimalista-1.jpg", "/mock/minimalista-2.jpg", "/mock/minimalista-3.jpg", "/mock/minimalista-4.jpg"],
-};
-
-function normalizeBg(bg: string): string {
-  const b = (bg || "").toLowerCase().trim();
-  return MOCKS[b] ? b : "empresa";
-}
-
-function calcMockProgress(createdAt: Date): { status: JobStatus; progress: number } {
-  const ageMs = Date.now() - createdAt.getTime();
-  if (ageMs < 1000) return { status: "queued",      progress: 5  };
-  if (ageMs < 7000) return { status: "processing",  progress: Math.min(10 + Math.floor(((ageMs - 1000) / 6000) * 75), 85) };
-  if (ageMs < 10000) return { status: "processing", progress: Math.min(85 + Math.floor(((ageMs - 7000) / 3000) * 14), 99) };
-  return { status: "done", progress: 100 };
-}
-
-function formatJob(job: {
-  id: string; status: string; progress: number; background: string;
-  createdAt: Date; uploadId: string | null; resultUrls: string | null;
-}, overrideUrls?: string[]) {
-  return {
-    id: job.id,
-    status: job.status,
-    progress: job.progress,
-    background: job.background,
-    createdAt: job.createdAt.getTime(),
-    uploadId: job.uploadId,
-    resultUrls: overrideUrls ?? (job.resultUrls ? JSON.parse(job.resultUrls) : undefined),
-  };
-}
-
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/job  — create a new job (training or direct generation)
+// ─────────────────────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   const session = await requireSession();
-  if (!session) {
-    return NextResponse.json({ success: false, error: "Não autorizado." }, { status: 401 });
-  }
+  if (!session) return NextResponse.json({ success: false, error: "Não autorizado." }, { status: 401 });
 
   try {
     const body = await req.json().catch(() => ({}));
-    const background = normalizeBg(String(body?.background || "empresa"));
-    const uploadId: string | undefined = body?.uploadId ? String(body.uploadId) : undefined;
+    const background: string = body?.background || "executivo";
+    const zipUrl:     string | undefined = body?.zipUrl;
+    const reuseLoRA:  boolean = body?.reuseLoRA === true;
+
+    // Check if user already has a trained LoRA
+    const user = await prisma.user.findUnique({ where: { id: session.user.id } });
+    const existingLoraUrl = user?.loraUrl ?? null;
+
+    if (reuseLoRA && existingLoraUrl) {
+      // ── Fast path: skip training, generate directly ──────────────────────
+      const job = await prisma.job.create({
+        data: {
+          userId: session.user.id,
+          status: "queued",
+          progress: 55,
+          background,
+          uploadId: zipUrl,
+          jobPhase: "generating",
+          loraUrl: existingLoraUrl,
+        },
+      });
+
+      const genRequestIds = await submitGenerationJob(existingLoraUrl, background);
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "processing", falRequestId: genRequestIds },
+      });
+
+      return NextResponse.json({ success: true, jobId: job.id });
+    }
+
+    // ── Training path ────────────────────────────────────────────────────────
+    if (!zipUrl) {
+      return NextResponse.json({ success: false, error: "Envie um zipUrl com as fotos." }, { status: 400 });
+    }
 
     const job = await prisma.job.create({
-      data: { userId: session.user.id, status: "queued", progress: 5, background, uploadId },
+      data: {
+        userId: session.user.id,
+        status: "queued",
+        progress: 5,
+        background,
+        uploadId: zipUrl,
+        jobPhase: "training",
+      },
     });
 
-    // Use real AI when upload is a public blob URL and FAL_KEY is configured
-    const useAI = uploadId?.startsWith("https://") && !!process.env.FAL_KEY;
-
-    if (useAI) {
-      try {
-        const falRequestId = await submitHeadshotJob(uploadId!, background);
-        await prisma.job.update({
-          where: { id: job.id },
-          data: { status: "processing", progress: 10, falRequestId },
-        });
-      } catch (err: unknown) {
-        // FAL.ai failed — fall back to mock mode so the job still runs
-        console.error("FAL.ai error (falling back to mock):", err instanceof Error ? err.message : err);
-      }
-    }
+    const trainingReqId = await submitTrainingJob(zipUrl);
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "processing", progress: 10, trainingReqId },
+    });
 
     return NextResponse.json({ success: true, jobId: job.id });
   } catch (err: unknown) {
@@ -79,74 +77,113 @@ export async function POST(req: Request) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/job?id=  — poll job status
+// ─────────────────────────────────────────────────────────────────────────────
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const jobId = searchParams.get("id");
-
-    if (!jobId) {
-      return NextResponse.json({ success: false, error: "Informe ?id=JOB_ID" }, { status: 400 });
-    }
+    const jobId = new URL(req.url).searchParams.get("id");
+    if (!jobId) return NextResponse.json({ success: false, error: "Informe ?id=" }, { status: 400 });
 
     const job = await prisma.job.findUnique({ where: { id: jobId } });
-    if (!job) {
-      return NextResponse.json({ success: false, error: "Job não encontrado" }, { status: 404 });
-    }
+    if (!job) return NextResponse.json({ success: false, error: "Job não encontrado" }, { status: 404 });
 
-    // Terminal state — return what's in the DB
+    // Terminal states
     if (job.status === "done" || job.status === "error") {
       return NextResponse.json({ success: true, job: formatJob(job) });
     }
 
-    // Real AI job — check FAL.ai status
-    if (job.falRequestId && process.env.FAL_KEY) {
+    // ── TRAINING PHASE ───────────────────────────────────────────────────────
+    if (job.jobPhase === "training" && job.trainingReqId) {
       try {
-        const ai = await checkHeadshotJob(job.falRequestId);
+        const result = await checkTrainingJob(job.trainingReqId);
 
-        if (ai.status === "done" || ai.status === "error") {
-          const resultUrls = ai.status === "done" ? ai.resultUrls : undefined;
+        if (result.done) {
+          // Training complete → save LoRA to user + start generation
+          await prisma.user.update({
+            where: { id: job.userId },
+            data: { loraUrl: result.loraUrl, loraAt: new Date() },
+          });
+
+          const genRequestIds = await submitGenerationJob(result.loraUrl, job.background);
+
           await prisma.job.update({
             where: { id: jobId },
             data: {
-              status: ai.status,
-              progress: ai.progress,
+              jobPhase: "generating",
+              loraUrl: result.loraUrl,
+              falRequestId: genRequestIds,
+              status: "processing",
+              progress: 60,
+            },
+          });
+
+          return NextResponse.json({
+            success: true,
+            job: { ...formatJob(job), jobPhase: "generating", progress: 60, status: "processing" },
+          });
+        }
+
+        // Still training
+        await prisma.job.update({ where: { id: jobId }, data: { progress: result.progress } });
+        return NextResponse.json({
+          success: true,
+          job: { ...formatJob(job), progress: result.progress },
+        });
+      } catch {
+        return NextResponse.json({ success: true, job: formatJob(job) });
+      }
+    }
+
+    // ── GENERATION PHASE ─────────────────────────────────────────────────────
+    if (job.falRequestId) {
+      try {
+        const result = await checkGenerationJob(job.falRequestId);
+
+        if (result.status === "done" || result.status === "error") {
+          const resultUrls = result.status === "done" ? result.resultUrls : undefined;
+          await prisma.job.update({
+            where: { id: jobId },
+            data: {
+              status: result.status,
+              progress: result.progress,
               resultUrls: resultUrls ? JSON.stringify(resultUrls) : null,
             },
           });
           return NextResponse.json({
             success: true,
-            job: { ...formatJob(job), status: ai.status, progress: ai.progress, resultUrls },
+            job: { ...formatJob(job), status: result.status, progress: result.progress, resultUrls },
           });
         }
 
         return NextResponse.json({
           success: true,
-          job: { ...formatJob(job), status: ai.status, progress: ai.progress },
+          job: { ...formatJob(job), status: result.status, progress: result.progress },
         });
       } catch {
-        // FAL.ai unreachable — return last known state without crashing
         return NextResponse.json({ success: true, job: formatJob(job) });
       }
     }
 
-    // Mock simulation (dev without FAL_KEY or local upload)
-    const { status, progress } = calcMockProgress(job.createdAt);
-    let resultUrls: string[] | undefined;
-
-    if (status === "done") {
-      resultUrls = MOCKS[normalizeBg(job.background)];
-      await prisma.job.update({
-        where: { id: jobId },
-        data: { status: "done", progress: 100, resultUrls: JSON.stringify(resultUrls) },
-      });
-    }
-
-    return NextResponse.json({
-      success: true,
-      job: { ...formatJob(job), status, progress, resultUrls },
-    });
+    return NextResponse.json({ success: true, job: formatJob(job) });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Erro ao buscar job";
     return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
+}
+
+function formatJob(job: {
+  id: string; status: string; progress: number; background: string;
+  jobPhase: string | null; createdAt: Date; uploadId: string | null; resultUrls: string | null;
+}) {
+  return {
+    id: job.id,
+    status: job.status,
+    progress: job.progress,
+    background: job.background,
+    jobPhase: job.jobPhase,
+    createdAt: job.createdAt.getTime(),
+    uploadId: job.uploadId,
+    resultUrls: job.resultUrls ? JSON.parse(job.resultUrls) : undefined,
+  };
 }

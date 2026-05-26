@@ -26,11 +26,12 @@ export async function POST(req: Request) {
 
     const f = file as File;
 
-    if (!["image/jpeg", "image/png"].includes(f.type)) {
-      return NextResponse.json({ success: false, error: "Somente JPG/PNG." }, { status: 400 });
+    const allowed = ["image/jpeg", "image/png", "application/zip", "application/x-zip-compressed"];
+    if (!allowed.includes(f.type)) {
+      return NextResponse.json({ success: false, error: "Somente JPG, PNG ou ZIP." }, { status: 400 });
     }
 
-    const ext = f.type === "image/png" ? "png" : "jpg";
+    const ext = f.type === "image/png" ? "png" : f.type === "image/jpeg" ? "jpg" : "zip";
 
     // Production: Vercel Blob
     if (process.env.BLOB_READ_WRITE_TOKEN) {

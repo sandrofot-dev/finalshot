@@ -13,6 +13,8 @@ model User {
   email         String?   @unique
   emailVerified DateTime?
   image         String?
+  loraUrl       String?   // Trained LoRA URL — reused across jobs
+  loraAt        DateTime? // When LoRA was trained
   accounts      Account[]
   sessions      Session[]
   jobs          Job[]
@@ -63,6 +65,9 @@ model Job {
   uploadId     String?
   resultUrls   String?
   falRequestId String?
+  jobPhase     String?  // "training" | "generating"
+  trainingReqId String? // FAL.ai training request ID
+  loraUrl      String?  // LoRA URL used for generation
   createdAt    DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

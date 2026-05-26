@@ -2,100 +2,128 @@ import { fal } from "@fal-ai/client";
 
 fal.config({ credentials: process.env.FAL_KEY });
 
-const MODEL = "fal-ai/instantid";
+const TRAIN_MODEL = "fal-ai/flux-lora-fast-training";
+const GEN_MODEL   = "fal-ai/flux-lora";
 
-// InstantID does NOT need a trigger word — just describe the scene
+// Trigger word embedded in prompts — must match what was used in training
+const TRIGGER = "TOK";
+
 const PROMPTS: Record<string, string> = {
   corporativo:
-    "professional corporate headshot, elegant office with bookshelves in background, soft natural window light, business attire, sharp focus on face, photorealistic, 4k",
+    `professional corporate headshot of ${TRIGGER}, elegant office with bookshelves in background, soft natural window light, business attire, sharp face, photorealistic, 4k`,
   startup:
-    "professional headshot, modern tech office background with glass walls and soft bokeh, business casual attire, bright cinematic lighting, sharp focus on face, photorealistic, 4k",
+    `professional headshot of ${TRIGGER}, modern tech office background with glass walls and soft bokeh, business casual attire, bright cinematic lighting, sharp face, photorealistic, 4k`,
   empresa:
-    "professional business portrait, blurred office environment far in background, colleagues out of focus behind, business attire, sharp focus on face, photorealistic, 4k",
+    `professional business portrait of ${TRIGGER}, blurred office environment far in background, colleagues out of focus, business attire, sharp face, photorealistic, 4k`,
   executivo:
-    "executive business portrait, dark solid background, dramatic professional studio lighting, formal business attire, confident expression, sharp focus on face, photorealistic, 4k",
+    `executive business portrait of ${TRIGGER}, dark solid background, dramatic professional studio lighting, formal business attire, confident expression, sharp face, photorealistic, 4k`,
   minimalista:
-    "professional LinkedIn headshot, clean white studio background, soft even lighting, centered composition, business casual, sharp focus on face, photorealistic, 4k",
+    `professional LinkedIn headshot of ${TRIGGER}, clean white studio background, soft even lighting, centered composition, business casual, sharp face, photorealistic, 4k`,
 };
 
 const NEGATIVE =
-  "ugly, deformed, distorted face, blurry face, bad anatomy, extra limbs, cartoon, anime, painting, watermark, text, artifacts, glitch, overexposed, underexposed, bad proportions, disfigured, mutated, low quality, worst quality, nsfw";
+  "ugly, deformed, distorted face, blurry face, bad anatomy, extra limbs, cartoon, anime, painting, watermark, text, artifacts, overexposed, underexposed, low quality, worst quality, nsfw";
 
-// Submit 4 parallel InstantID requests with different seeds → better variety + identity
-export async function submitHeadshotJob(
-  uploadUrl: string,
+// ─────────────────────────────────────────────────────────────────────────────
+// TRAINING
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function submitTrainingJob(zipUrl: string): Promise<string> {
+  const { request_id } = await fal.queue.submit(TRAIN_MODEL, {
+    input: {
+      images_data_url: zipUrl,
+      trigger_word: TRIGGER,
+      create_masks: true,   // face segmentation masks for better identity learning
+      steps: 1000,
+    },
+  });
+  return request_id;
+}
+
+export type TrainingStatus =
+  | { done: false;  progress: number }
+  | { done: true;   loraUrl: string  };
+
+export async function checkTrainingJob(requestId: string): Promise<TrainingStatus> {
+  const status = await fal.queue.status(TRAIN_MODEL, { requestId, logs: false });
+
+  if (status.status === "COMPLETED") {
+    const result = await fal.queue.result(TRAIN_MODEL, { requestId });
+    const data = result.data as { diffusers_lora_file: { url: string } };
+    return { done: true, loraUrl: data.diffusers_lora_file.url };
+  }
+
+  const queuePos = status.status === "IN_QUEUE" ? (status.queue_position ?? 0) : 0;
+  const progress = status.status === "IN_PROGRESS" ? 55 : Math.max(5, 30 - queuePos * 5);
+  return { done: false, progress };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERATION (with trained LoRA)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function submitGenerationJob(
+  loraUrl: string,
   background: string
 ): Promise<string> {
-  const prompt = PROMPTS[background] ?? PROMPTS.empresa;
-
-  const seeds = [42, 137, 2024, 8888];
+  const prompt = PROMPTS[background] ?? PROMPTS.executivo;
+  const seeds  = [42, 137, 2024, 8888];
 
   const results = await Promise.all(
     seeds.map((seed) =>
-      fal.queue.submit(MODEL, {
+      fal.queue.submit(GEN_MODEL, {
         input: {
-          face_image_url: uploadUrl,
           prompt,
-          negative_prompt: NEGATIVE,
-          style: "Headshot",
-          num_inference_steps: 30,
-          guidance_scale: 7,
-          ip_adapter_scale: 0.8,
-          identity_controlnet_conditioning_scale: 0.85,
-          enhance_face_region: true,
-          enable_lcm: false,
+          loras: [{ path: loraUrl, scale: 0.85 }],
+          num_images: 1,
+          image_size: "portrait_4_3",
+          num_inference_steps: 28,
+          guidance_scale: 3.5,
           seed,
+          enable_safety_checker: false,
         },
       })
     )
   );
 
-  // Store all 4 request IDs as JSON array
   return JSON.stringify(results.map((r) => r.request_id));
 }
 
-type FalStatus =
-  | { status: "queued"; progress: number }
-  | { status: "processing"; progress: number }
-  | { status: "done"; progress: 100; resultUrls: string[] }
-  | { status: "error"; progress: 0 };
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERATION STATUS CHECK
+// ─────────────────────────────────────────────────────────────────────────────
 
 type SingleResult =
-  | { done: true; url: string }
+  | { done: true;  url: string }
   | { done: false; progress: number };
 
 async function checkSingle(requestId: string): Promise<SingleResult> {
-  const status = await fal.queue.status(MODEL, { requestId, logs: false });
-
+  const status = await fal.queue.status(GEN_MODEL, { requestId, logs: false });
   if (status.status === "COMPLETED") {
-    const result = await fal.queue.result(MODEL, { requestId });
-    const data = result.data as unknown as { image?: { url: string }; images?: Array<{ url: string }> };
-    const url = data.image?.url ?? data.images?.[0]?.url ?? "";
-    return { done: true, url };
+    const result = await fal.queue.result(GEN_MODEL, { requestId });
+    const data = result.data as { images?: Array<{ url: string }> };
+    return { done: true, url: data.images?.[0]?.url ?? "" };
   }
-
   const queuePos = status.status === "IN_QUEUE" ? (status.queue_position ?? 0) : 0;
-  const progress = status.status === "IN_PROGRESS" ? 60 : Math.max(5, 50 - queuePos * 10);
+  const progress = status.status === "IN_PROGRESS" ? 75 : Math.max(55, 70 - queuePos * 5);
   return { done: false, progress };
 }
 
-export async function checkHeadshotJob(falRequestId: string): Promise<FalStatus> {
+export type GenerationStatus =
+  | { status: "queued" | "processing"; progress: number }
+  | { status: "done";  progress: 100;  resultUrls: string[] }
+  | { status: "error"; progress: 0 };
+
+export async function checkGenerationJob(falRequestId: string): Promise<GenerationStatus> {
   try {
-    // Support both old (single string) and new (JSON array) formats
     let ids: string[];
-    try {
-      ids = JSON.parse(falRequestId);
-      if (!Array.isArray(ids)) ids = [falRequestId];
-    } catch {
-      ids = [falRequestId];
-    }
+    try { ids = JSON.parse(falRequestId); if (!Array.isArray(ids)) ids = [falRequestId]; }
+    catch { ids = [falRequestId]; }
 
     const checks = await Promise.all(ids.map(checkSingle));
-
     const doneCount = checks.filter((c) => c.done).length;
-    const allDone = doneCount === ids.length;
 
-    if (allDone) {
+    if (doneCount === ids.length) {
       const resultUrls = checks
         .filter((c): c is { done: true; url: string } => c.done)
         .map((c) => c.url)
@@ -106,11 +134,7 @@ export async function checkHeadshotJob(falRequestId: string): Promise<FalStatus>
     const avgProgress = Math.round(
       checks.reduce((sum, c) => sum + (c.done ? 100 : c.progress), 0) / ids.length
     );
-
-    return {
-      status: doneCount > 0 ? "processing" : "queued",
-      progress: Math.min(avgProgress, 99),
-    };
+    return { status: doneCount > 0 ? "processing" : "queued", progress: Math.min(avgProgress, 99) };
   } catch {
     return { status: "error", progress: 0 };
   }
