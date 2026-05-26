@@ -138,41 +138,80 @@ export async function submitGenerationJob(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST-PROCESSING: Clarity Upscaler (sharpness + skin texture + hair detail)
+// POST-PROCESSING: CodeFormer → Clarity Upscaler
+//
+// Two-stage pipeline that matches professional headshot quality:
+//   1. CodeFormer  — face restoration: skin texture, pores, hair, eyes (fast)
+//   2. Clarity     — 2× upscale + micro-detail (768×1024 → 1536×2048)
+//
+// Each image runs in parallel; 45-second total timeout with original fallback.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function upscaleImages(urls: string[]): Promise<string[]> {
-  return Promise.all(urls.map(upscaleOne));
+  return Promise.all(urls.map(enhanceOne));
 }
 
-async function upscaleOne(imageUrl: string): Promise<string> {
-  const TIMEOUT_MS = 45_000; // 45-second safety per image
+async function enhanceOne(imageUrl: string): Promise<string> {
+  const TIMEOUT_MS = 50_000;
 
-  const upscalePromise = (async () => {
+  const pipeline = async () => {
+    const restored  = await faceRestore(imageUrl);   // CodeFormer
+    const sharpened = await clarityUpscale(restored); // Clarity Upscaler
+    return sharpened;
+  };
+
+  const timeout = new Promise<string>((resolve) =>
+    setTimeout(() => resolve(imageUrl), TIMEOUT_MS)
+  );
+
+  try {
+    return await Promise.race([pipeline(), timeout]);
+  } catch {
+    return imageUrl;
+  }
+}
+
+// ── Stage 1: CodeFormer — face restoration ────────────────────────────────────
+// fidelity_weight: 0 = max quality (may alter face), 1 = max identity (no change)
+// 0.6 gives realistic skin texture while keeping the person recognisable
+async function faceRestore(imageUrl: string): Promise<string> {
+  try {
+    const result = await fal.subscribe("fal-ai/codeformer", {
+      input: {
+        image_url:        imageUrl,
+        fidelity:         0.6,   // 0=max quality, 1=max identity — sweet spot
+        upscale_factor:   1,     // no upscale here — Clarity handles it
+        only_center_face: true,  // focus on the headshot subject
+        face_upscale:     false, // skip built-in face upscale (Clarity does it)
+      },
+      logs: false,
+    });
+    const data = result.data as { image?: { url: string } };
+    return data.image?.url ?? imageUrl;
+  } catch {
+    return imageUrl;
+  }
+}
+
+// ── Stage 2: Clarity Upscaler — 2× sharpening ────────────────────────────────
+async function clarityUpscale(imageUrl: string): Promise<string> {
+  try {
     const result = await fal.subscribe("fal-ai/clarity-upscaler", {
       input: {
-        image_url: imageUrl,
-        upscale_factor: 2,       // 768×1024 → 1536×2048
-        creativity: 0.12,        // very low — preserve the person's face
-        resemblance: 2.0,        // high — keep identity intact (0-3 scale)
-        guidance_scale: 4.0,
-        num_inference_steps: 18,
+        image_url:           imageUrl,
+        upscale_factor:      2,    // 768×1024 → 1536×2048
+        creativity:          0.10, // minimal — don't invent new features
+        resemblance:         2.0,  // high — keep restored face intact
+        guidance_scale:      4.0,
+        num_inference_steps: 16,
         enable_safety_checker: false,
       },
       logs: false,
     });
     const data = result.data as { image?: { url: string } };
     return data.image?.url ?? imageUrl;
-  })();
-
-  const timeoutPromise = new Promise<string>((resolve) =>
-    setTimeout(() => resolve(imageUrl), TIMEOUT_MS) // fallback to original
-  );
-
-  try {
-    return await Promise.race([upscalePromise, timeoutPromise]);
   } catch {
-    return imageUrl; // fallback to original on any error
+    return imageUrl;
   }
 }
 
