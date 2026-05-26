@@ -2,47 +2,56 @@ import { fal } from "@fal-ai/client";
 
 fal.config({ credentials: process.env.FAL_KEY });
 
-const MODEL = "fal-ai/photomaker";
+const MODEL = "fal-ai/instantid";
 
-// "img" is the PhotoMaker trigger word — must be in the prompt
-// Prompts are optimized for face consistency and realism
+// InstantID does NOT need a trigger word — just describe the scene
 const PROMPTS: Record<string, string> = {
   corporativo:
-    "a photo of img person, professional corporate headshot, elegant office background with bookshelves, soft natural window light, sharp face, studio quality, 4k, photorealistic",
+    "professional corporate headshot, elegant office with bookshelves in background, soft natural window light, business attire, sharp focus on face, photorealistic, 4k",
   startup:
-    "a photo of img person, professional headshot, modern tech office background with glass walls, soft bokeh, contemporary lighting, sharp face, studio quality, 4k, photorealistic",
+    "professional headshot, modern tech office background with glass walls and soft bokeh, business casual attire, bright cinematic lighting, sharp focus on face, photorealistic, 4k",
   empresa:
-    "a photo of img person, professional business portrait, office environment background with out-of-focus colleagues far behind, deep depth of field on face, sharp face, studio quality, 4k, photorealistic",
+    "professional business portrait, blurred office environment far in background, colleagues out of focus behind, business attire, sharp focus on face, photorealistic, 4k",
   executivo:
-    "a photo of img person, executive business portrait, dark solid background, dramatic professional lighting, confident CEO look, sharp face, studio quality, 4k, photorealistic",
+    "executive business portrait, dark solid background, dramatic professional studio lighting, formal business attire, confident expression, sharp focus on face, photorealistic, 4k",
   minimalista:
-    "a photo of img person, professional LinkedIn headshot, clean white studio background, soft even lighting, centered composition, sharp face, studio quality, 4k, photorealistic",
+    "professional LinkedIn headshot, clean white studio background, soft even lighting, centered composition, business casual, sharp focus on face, photorealistic, 4k",
 };
 
-// Strong negative prompt to prevent the most common PhotoMaker artifacts
 const NEGATIVE =
-  "duplicate person, duplicate face, same person twice, person in background, ugly, deformed, distorted face, blurry face, bad anatomy, extra limbs, cartoon, anime, painting, watermark, text, artifacts, glitch, noise, overexposed, underexposed, bad proportions, disfigured, mutated, low quality, worst quality, jpeg artifacts";
+  "ugly, deformed, distorted face, blurry face, bad anatomy, extra limbs, cartoon, anime, painting, watermark, text, artifacts, glitch, overexposed, underexposed, bad proportions, disfigured, mutated, low quality, worst quality, nsfw";
 
+// Submit 4 parallel InstantID requests with different seeds → better variety + identity
 export async function submitHeadshotJob(
   uploadUrl: string,
   background: string
 ): Promise<string> {
   const prompt = PROMPTS[background] ?? PROMPTS.empresa;
 
-  const { request_id } = await fal.queue.submit(MODEL, {
-    input: {
-      image_archive_url: uploadUrl,
-      prompt,
-      negative_prompt: NEGATIVE,
-      style: "Photographic",
-      num_images: 4,
-      guidance_scale: 7.5,       // higher = more prompt-accurate, better face control
-      num_inference_steps: 50,
-      style_strength: 35,  // lower = more identity preservation (default is 20, max 50)
-    },
-  });
+  const seeds = [42, 137, 2024, 8888];
 
-  return request_id;
+  const results = await Promise.all(
+    seeds.map((seed) =>
+      fal.queue.submit(MODEL, {
+        input: {
+          face_image_url: uploadUrl,
+          prompt,
+          negative_prompt: NEGATIVE,
+          style: "Headshot",
+          num_inference_steps: 30,
+          guidance_scale: 7,
+          ip_adapter_scale: 0.8,
+          identity_controlnet_conditioning_scale: 0.85,
+          enhance_face_region: true,
+          enable_lcm: false,
+          seed,
+        },
+      })
+    )
+  );
+
+  // Store all 4 request IDs as JSON array
+  return JSON.stringify(results.map((r) => r.request_id));
 }
 
 type FalStatus =
@@ -51,21 +60,58 @@ type FalStatus =
   | { status: "done"; progress: 100; resultUrls: string[] }
   | { status: "error"; progress: 0 };
 
-export async function checkHeadshotJob(requestId: string): Promise<FalStatus> {
+type SingleResult =
+  | { done: true; url: string }
+  | { done: false; progress: number };
+
+async function checkSingle(requestId: string): Promise<SingleResult> {
   const status = await fal.queue.status(MODEL, { requestId, logs: false });
 
   if (status.status === "COMPLETED") {
     const result = await fal.queue.result(MODEL, { requestId });
-    const data = result.data as unknown as { images: Array<{ url: string }> };
-    const resultUrls = data.images.map((img) => img.url);
-    return { status: "done", progress: 100, resultUrls };
+    const data = result.data as unknown as { image?: { url: string }; images?: Array<{ url: string }> };
+    const url = data.image?.url ?? data.images?.[0]?.url ?? "";
+    return { done: true, url };
   }
 
   const queuePos = status.status === "IN_QUEUE" ? (status.queue_position ?? 0) : 0;
-  const progress = status.status === "IN_PROGRESS" ? 60 : Math.max(10, 50 - queuePos * 10);
+  const progress = status.status === "IN_PROGRESS" ? 60 : Math.max(5, 50 - queuePos * 10);
+  return { done: false, progress };
+}
 
-  return {
-    status: status.status === "IN_PROGRESS" ? "processing" : "queued",
-    progress,
-  };
+export async function checkHeadshotJob(falRequestId: string): Promise<FalStatus> {
+  try {
+    // Support both old (single string) and new (JSON array) formats
+    let ids: string[];
+    try {
+      ids = JSON.parse(falRequestId);
+      if (!Array.isArray(ids)) ids = [falRequestId];
+    } catch {
+      ids = [falRequestId];
+    }
+
+    const checks = await Promise.all(ids.map(checkSingle));
+
+    const doneCount = checks.filter((c) => c.done).length;
+    const allDone = doneCount === ids.length;
+
+    if (allDone) {
+      const resultUrls = checks
+        .filter((c): c is { done: true; url: string } => c.done)
+        .map((c) => c.url)
+        .filter(Boolean);
+      return { status: "done", progress: 100, resultUrls };
+    }
+
+    const avgProgress = Math.round(
+      checks.reduce((sum, c) => sum + (c.done ? 100 : c.progress), 0) / ids.length
+    );
+
+    return {
+      status: doneCount > 0 ? "processing" : "queued",
+      progress: Math.min(avgProgress, 99),
+    };
+  } catch {
+    return { status: "error", progress: 0 };
+  }
 }
