@@ -99,12 +99,25 @@ export async function GET(req: Request) {
         const result = await checkTrainingJob(job.trainingReqId);
 
         if (result.done) {
-          // Training complete → save LoRA to user + start generation
+          // Training complete → always save LoRA to user
           await prisma.user.update({
             where: { id: job.userId },
             data: { loraUrl: result.loraUrl, loraAt: new Date() },
           });
 
+          // Training-only mode: don't auto-generate, let the frontend pick style and trigger generation
+          if (job.background === "__training_only__") {
+            await prisma.job.update({
+              where: { id: jobId },
+              data: { status: "done", progress: 100, loraUrl: result.loraUrl },
+            });
+            return NextResponse.json({
+              success: true,
+              job: { ...formatJob(job), status: "done", progress: 100, loraUrl: result.loraUrl },
+            });
+          }
+
+          // Normal mode: auto-start generation
           const genRequestIds = await submitGenerationJob(result.loraUrl, job.background);
 
           await prisma.job.update({
@@ -174,7 +187,8 @@ export async function GET(req: Request) {
 
 function formatJob(job: {
   id: string; status: string; progress: number; background: string;
-  jobPhase: string | null; createdAt: Date; uploadId: string | null; resultUrls: string | null;
+  jobPhase: string | null; createdAt: Date; uploadId: string | null;
+  resultUrls: string | null; loraUrl?: string | null;
 }) {
   return {
     id: job.id,
@@ -185,5 +199,6 @@ function formatJob(job: {
     createdAt: job.createdAt.getTime(),
     uploadId: job.uploadId,
     resultUrls: job.resultUrls ? JSON.parse(job.resultUrls) : undefined,
+    loraUrl: job.loraUrl ?? undefined,
   };
 }
