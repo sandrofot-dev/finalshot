@@ -78,19 +78,40 @@ export default function UploadPage() {
     };
   }, []);
 
+  async function compressImage(file: File, maxPx = 1024, quality = 0.85): Promise<Blob> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let { width, height } = img;
+        if (width > maxPx || height > maxPx) {
+          if (width > height) { height = Math.round(height * maxPx / width); width = maxPx; }
+          else { width = Math.round(width * maxPx / height); height = maxPx; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Falha ao comprimir imagem")), "image/jpeg", quality);
+      };
+      img.onerror = reject;
+      img.src = url;
+    });
+  }
+
   async function doUploadIfNeeded(): Promise<string> {
     if (!file) throw new Error("Selecione uma foto antes.");
     if (uploadId) return uploadId;
 
+    // Compress to max 1024px / JPEG before uploading (stays well under 4.5 MB limit)
+    const compressed = await compressImage(file);
     const form = new FormData();
-    form.append("file", file);
+    form.append("file", compressed, "photo.jpg");
 
     const res = await fetch("/api/upload", { method: "POST", body: form });
     const data = await res.json();
 
-    if (!res.ok || !data?.success) {
-      throw new Error(data?.error || "Falha no upload.");
-    }
+    if (!res.ok || !data?.success) throw new Error(data?.error || "Falha no upload.");
 
     const id = String(data.uploadId);
     setUploadId(id);

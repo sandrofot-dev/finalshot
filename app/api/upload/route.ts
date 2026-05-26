@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
+import { put } from "@vercel/blob";
 import fs from "fs/promises";
 import path from "path";
-import { put } from "@vercel/blob";
 import { requireSession } from "@/app/lib/session";
 
 export const runtime = "nodejs";
@@ -21,19 +21,13 @@ export async function POST(req: Request) {
     const file = form.get("file");
 
     if (!file || typeof file === "string") {
-      return NextResponse.json(
-        { success: false, error: "Envie um arquivo no campo 'file'." },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "Envie um arquivo no campo 'file'." }, { status: 400 });
     }
 
     const f = file as File;
 
     if (!["image/jpeg", "image/png"].includes(f.type)) {
-      return NextResponse.json(
-        { success: false, error: "Somente JPG/PNG." },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "Somente JPG/PNG." }, { status: 400 });
     }
 
     const ext = f.type === "image/png" ? "png" : "jpg";
@@ -49,13 +43,12 @@ export async function POST(req: Request) {
 
     // Development: local disk
     const bytes = await f.arrayBuffer();
-    const buffer = Buffer.from(bytes);
     const uploadId = newId();
     const dir = path.join("/tmp", "uploads");
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, `${uploadId}.${ext}`), buffer);
-
+    await fs.writeFile(path.join(dir, `${uploadId}.${ext}`), Buffer.from(bytes));
     return NextResponse.json({ success: true, uploadId });
+
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Erro no upload";
     return NextResponse.json({ success: false, error: msg }, { status: 500 });
