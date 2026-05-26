@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
 type BgKey = "corporativo" | "startup" | "empresa" | "executivo" | "minimalista";
 type JobStatus = "queued" | "processing" | "done" | "error";
@@ -13,146 +13,127 @@ type Job = {
   createdAt: number;
   uploadId?: string;
   resultUrls?: string[];
-  error?: string;
 };
 
-const BACKGROUNDS: Array<{
-  key: BgKey;
-  title: string;
-  desc: string;
-  thumb: string;
-}> = [
+const BACKGROUNDS: Array<{ key: BgKey; title: string; desc: string; thumb: string }> = [
   { key: "corporativo", title: "Escritório Corporativo", desc: "Ambiente profissional com escritório elegante ao fundo", thumb: "/mock/corporativo-1.png" },
-  { key: "startup", title: "Startup Moderna", desc: "Ambiente moderno com design clean", thumb: "/mock/startup-1.jpg" },
-  { key: "empresa", title: "Empresa com Pessoas Desfocadas", desc: "Clima empresarial com pessoas ao fundo desfocadas", thumb: "/mock/empresa-1.jpg" },
-  { key: "executivo", title: "Executivo Fundo Escuro", desc: "Fundo escuro premium estilo CEO", thumb: "/mock/executivo-1.jpg" },
-  { key: "minimalista", title: "Minimalista Branco", desc: "Fundo branco clean estilo LinkedIn", thumb: "/mock/minimalista-1.jpg" },
+  { key: "startup",     title: "Startup Moderna",        desc: "Ambiente moderno com design clean",                  thumb: "/mock/startup-1.jpg" },
+  { key: "empresa",     title: "Empresa com Pessoas",    desc: "Clima empresarial com pessoas ao fundo desfocadas",   thumb: "/mock/empresa-1.jpg" },
+  { key: "executivo",   title: "Executivo Fundo Escuro", desc: "Fundo escuro premium estilo CEO",                    thumb: "/mock/executivo-1.jpg" },
+  { key: "minimalista", title: "Minimalista Branco",     desc: "Fundo branco clean estilo LinkedIn",                 thumb: "/mock/minimalista-1.jpg" },
 ];
 
-function cn(...classes: Array<string | false | undefined | null>) {
-  return classes.filter(Boolean).join(" ");
-}
+function cn(...c: Array<string | false | undefined | null>) { return c.filter(Boolean).join(" "); }
 
 function statusLabel(s?: JobStatus) {
-  if (!s) return "—";
-  if (s === "queued") return "Na fila";
-  if (s === "processing") return "Processando";
-  if (s === "done") return "Concluído";
-  if (s === "error") return "Erro";
-  return s;
+  if (s === "queued")     return "Na fila…";
+  if (s === "processing") return "Processando…";
+  if (s === "done")       return "Concluído";
+  if (s === "error")      return "Erro";
+  return "—";
+}
+
+async function compressImage(file: File, maxPx = 1024, quality = 0.88): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxPx || height > maxPx) {
+        if (width > height) { height = Math.round(height * maxPx / width); width = maxPx; }
+        else { width = Math.round(width * maxPx / height); height = maxPx; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (b) => b ? resolve(b) : reject(new Error("Falha ao comprimir imagem")),
+        "image/jpeg", quality
+      );
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+async function uploadFile(file: File): Promise<string> {
+  const compressed = await compressImage(file);
+  const form = new FormData();
+  form.append("file", compressed, "photo.jpg");
+  const res = await fetch("/api/upload", { method: "POST", body: form });
+  const data = await res.json();
+  if (!res.ok || !data?.success) throw new Error(data?.error || "Falha no upload.");
+  return String(data.uploadId);
 }
 
 export default function UploadPage() {
-  const [selectedBg, setSelectedBg] = useState<BgKey>("empresa");
-  const [file, setFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-
-  const [uploadId, setUploadId] = useState<string | null>(null);
+  const [selectedBg, setSelectedBg]   = useState<BgKey>("empresa");
+  const [files, setFiles]             = useState<File[]>([]);
+  const [previews, setPreviews]       = useState<string[]>([]);
+  const [primaryIdx, setPrimaryIdx]   = useState(0);
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  const [isDragging, setIsDragging]   = useState(false);
 
   const [isWorking, setIsWorking] = useState(false);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [job, setJob] = useState<Job | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [jobId, setJobId]         = useState<string | null>(null);
+  const [job, setJob]             = useState<Job | null>(null);
+  const [error, setError]         = useState<string | null>(null);
 
   const pollRef = useRef<number | null>(null);
+  const selectedBgObj = useMemo(() => BACKGROUNDS.find((b) => b.key === selectedBg)!, [selectedBg]);
 
-  const selectedBgObj = useMemo(
-    () => BACKGROUNDS.find((b) => b.key === selectedBg)!,
-    [selectedBg]
-  );
-
+  // Build / revoke preview URLs whenever files change
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
-      setUploadId(null);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    const urls = files.map((f) => URL.createObjectURL(f));
+    setPreviews(urls);
+    setUploadedUrl(null);
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, [files]);
 
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current);
-    };
+  useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
+
+  const addFiles = useCallback((incoming: FileList | null) => {
+    if (!incoming) return;
+    const valid = Array.from(incoming)
+      .filter((f) => ["image/jpeg", "image/png"].includes(f.type))
+      .slice(0, 5);
+    if (!valid.length) { setError("Selecione apenas JPG ou PNG."); return; }
+    setFiles((prev) => {
+      const merged = [...prev, ...valid].slice(0, 5);
+      if (prev.length === 0) setPrimaryIdx(0);
+      return merged;
+    });
+    setError(null);
   }, []);
 
-  async function compressImage(file: File, maxPx = 1024, quality = 0.85): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        let { width, height } = img;
-        if (width > maxPx || height > maxPx) {
-          if (width > height) { height = Math.round(height * maxPx / width); width = maxPx; }
-          else { width = Math.round(width * maxPx / height); height = maxPx; }
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width; canvas.height = height;
-        canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
-        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Falha ao comprimir imagem")), "image/jpeg", quality);
-      };
-      img.onerror = reject;
-      img.src = url;
-    });
-  }
-
-  async function doUploadIfNeeded(): Promise<string> {
-    if (!file) throw new Error("Selecione uma foto antes.");
-    if (uploadId) return uploadId;
-
-    // Compress to max 1024px / JPEG before uploading (stays well under 4.5 MB limit)
-    const compressed = await compressImage(file);
-    const form = new FormData();
-    form.append("file", compressed, "photo.jpg");
-
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    const data = await res.json();
-
-    if (!res.ok || !data?.success) throw new Error(data?.error || "Falha no upload.");
-
-    const id = String(data.uploadId);
-    setUploadId(id);
-    return id;
-  }
-
   async function createJob() {
+    if (!files.length) { setError("Selecione pelo menos uma foto."); return; }
     setError(null);
-
-    if (!file) {
-      setError("Selecione uma foto (JPG/PNG) antes de gerar.");
-      return;
-    }
-
     setIsWorking(true);
-
     try {
-      // 1) upload real
-      const upId = await doUploadIfNeeded();
+      // Upload primary photo (or use cached URL)
+      const url = uploadedUrl ?? await (async () => {
+        const u = await uploadFile(files[primaryIdx] ?? files[0]);
+        setUploadedUrl(u);
+        return u;
+      })();
 
-      // 2) criar job
-      const res = await fetch("/api/job", {
+      const res  = await fetch("/api/job", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ background: selectedBg, uploadId: upId }),
+        body: JSON.stringify({ background: selectedBg, uploadId: url }),
       });
-
       const data = await res.json();
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || "Falha ao criar job.");
-      }
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Falha ao criar job.");
 
       const id = String(data.jobId);
       setJobId(id);
-
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = window.setInterval(() => fetchJob(id), 700);
-
       await fetchJob(id);
-    } catch (e: any) {
-      setError(e?.message || "Erro inesperado.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Erro inesperado.");
     } finally {
       setIsWorking(false);
     }
@@ -160,119 +141,144 @@ export default function UploadPage() {
 
   async function fetchJob(id: string) {
     try {
-      const res = await fetch(`/api/job?id=${encodeURIComponent(id)}`);
+      const res  = await fetch(`/api/job?id=${encodeURIComponent(id)}`);
       const data = await res.json();
-
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || "Não foi possível buscar status do job.");
-      }
-
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Erro ao buscar status.");
       const j: Job = data.job;
       setJob(j);
-
       if (j.status === "done" || j.status === "error") {
         if (pollRef.current) window.clearInterval(pollRef.current);
         pollRef.current = null;
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
-      setError(e?.message || "Erro ao atualizar status.");
+      setError(e instanceof Error ? e.message : "Erro ao atualizar status.");
     }
   }
 
   function resetAll() {
-    setFile(null);
-    setPreviewUrl(null);
-    setUploadId(null);
-    setJobId(null);
-    setJob(null);
-    setError(null);
+    setFiles([]); setPreviews([]); setPrimaryIdx(0);
+    setUploadedUrl(null); setJobId(null); setJob(null); setError(null);
     if (pollRef.current) window.clearInterval(pollRef.current);
     pollRef.current = null;
   }
 
   const progress = job?.progress ?? 0;
-  const isBusy = isWorking || job?.status === "processing" || job?.status === "queued";
+  const isBusy   = isWorking || job?.status === "processing" || job?.status === "queued";
 
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-6xl px-6 py-12">
+
+        {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-4xl font-bold">Envie suas selfies</h1>
-            <p className="mt-2 text-gray-300 text-sm">
-              Faça upload de uma foto, escolha o estilo e gere 4 variações profissionais.
+            <h1 className="text-4xl font-bold">Criar headshot profissional</h1>
+            <p className="mt-2 text-gray-400 text-sm">
+              Envie até 5 fotos com boa iluminação — a IA escolhe a melhor referência para o seu rosto.
             </p>
           </div>
-          <a
-            href="/"
-            className="rounded-xl border border-gray-700 bg-black/30 px-5 py-2 text-sm hover:border-gray-500 transition"
-          >
+          <a href="/" className="rounded-xl border border-gray-700 bg-black/30 px-5 py-2 text-sm hover:border-gray-500 transition">
             Voltar
           </a>
         </div>
 
         <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
-          {/* Upload */}
+
+          {/* ── STEP 1: Upload ── */}
           <section className="rounded-2xl border border-gray-800 bg-white/5 p-6">
-            <h2 className="text-lg font-semibold">1) Upload</h2>
-
-            <label className="mt-4 block cursor-pointer rounded-xl border border-gray-700 bg-black/40 px-4 py-4 hover:border-gray-500">
-              <div className="text-sm text-gray-200">
-                Clique para escolher uma foto (JPG/PNG)
-              </div>
-              <div className="mt-1 text-xs text-gray-400">
-                Boa luz + rosto centralizado
-              </div>
-              <input
-                className="hidden"
-                type="file"
-                accept="image/png,image/jpeg"
-                onChange={(e) => {
-                  const f = e.target.files?.[0] || null;
-                  setFile(f);
-                  setError(null);
-                }}
-              />
-            </label>
-
-            <div className="mt-6">
-              <div className="text-sm text-gray-300">Preview</div>
-              <div className="mt-2 aspect-video w-full overflow-hidden rounded-xl border border-gray-800 bg-black/40">
-                {previewUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={previewUrl}
-                    alt="Preview"
-                    className="h-full w-full object-contain"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-gray-500">
-                    Nenhuma foto selecionada
-                  </div>
-                )}
-              </div>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">1) Suas fotos</h2>
+              {files.length > 0 && (
+                <span className="text-xs text-gray-400">{files.length}/5 fotos</span>
+              )}
             </div>
 
-            {file && (
-              <div className="mt-3 text-xs text-gray-400">
-                Arquivo: <span className="text-gray-200">{file.name}</span>
+            {/* Drop zone */}
+            <label
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setIsDragging(false); addFiles(e.dataTransfer.files); }}
+              className={cn(
+                "mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 transition",
+                isDragging ? "border-green-500 bg-green-500/10" : "border-gray-700 bg-black/30 hover:border-gray-500"
+              )}
+            >
+              <svg className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+              </svg>
+              <div className="text-center">
+                <p className="text-sm text-gray-200 font-medium">Arraste ou clique para selecionar</p>
+                <p className="mt-1 text-xs text-gray-400">JPG/PNG · até 5 fotos · rosto centralizado e boa luz</p>
+              </div>
+              <input className="hidden" type="file" accept="image/png,image/jpeg" multiple
+                onChange={(e) => addFiles(e.target.files)} />
+            </label>
+
+            {/* Photo thumbnails */}
+            {previews.length > 0 && (
+              <div className="mt-5">
+                <p className="text-xs text-gray-400 mb-2">
+                  Clique numa foto para definir como <span className="text-green-400">principal</span> (usada como referência)
+                </p>
+                <div className="grid grid-cols-5 gap-2">
+                  {previews.map((url, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => { setPrimaryIdx(i); setUploadedUrl(null); }}
+                      className={cn(
+                        "relative overflow-hidden rounded-lg border-2 transition aspect-square",
+                        i === primaryIdx ? "border-green-500" : "border-gray-700 hover:border-gray-500"
+                      )}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt={`Foto ${i + 1}`} className="h-full w-full object-cover" />
+                      {i === primaryIdx && (
+                        <div className="absolute bottom-0 left-0 right-0 bg-green-500/80 text-center text-[10px] font-bold text-black py-0.5">
+                          Principal
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFiles((prev) => prev.filter((_, j) => j !== i));
+                          setPrimaryIdx((prev) => Math.max(0, prev > i ? prev - 1 : prev));
+                          setUploadedUrl(null);
+                        }}
+                        className="absolute top-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white text-[10px] hover:bg-red-600"
+                      >
+                        ×
+                      </button>
+                    </button>
+                  ))}
+                  {files.length < 5 && (
+                    <label className="flex aspect-square cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-gray-700 hover:border-gray-500 transition">
+                      <span className="text-2xl text-gray-600">+</span>
+                      <input className="hidden" type="file" accept="image/png,image/jpeg" multiple
+                        onChange={(e) => addFiles(e.target.files)} />
+                    </label>
+                  )}
+                </div>
               </div>
             )}
 
-            {uploadId && (
-              <div className="mt-2 text-xs text-gray-500">
-                UploadId: <span className="text-gray-200">{uploadId}</span>
-              </div>
-            )}
+            {/* Tips */}
+            <div className="mt-5 rounded-xl bg-white/5 px-4 py-3 text-xs text-gray-400 space-y-1">
+              <p className="font-medium text-gray-300">Dicas para melhores resultados:</p>
+              <p>✓ Rosto centralizado e bem iluminado</p>
+              <p>✓ Fundo simples (parede, cortina)</p>
+              <p>✓ Sem óculos escuros ou chapéu</p>
+              <p>✓ Múltiplas fotos = mais consistência</p>
+            </div>
           </section>
 
-          {/* Fundos */}
+          {/* ── STEP 2: Background ── */}
           <section className="rounded-2xl border border-gray-800 bg-white/5 p-6">
-            <h2 className="text-lg font-semibold">2) Escolha o fundo</h2>
-
-            <div className="mt-4 space-y-3">
+            <h2 className="text-lg font-semibold">2) Escolha o estilo</h2>
+            <div className="mt-4 space-y-2">
               {BACKGROUNDS.map((bg) => {
                 const active = bg.key === selectedBg;
                 return (
@@ -281,26 +287,20 @@ export default function UploadPage() {
                     type="button"
                     onClick={() => setSelectedBg(bg.key)}
                     className={cn(
-                      "w-full rounded-xl border p-4 text-left transition",
-                      active
-                        ? "border-green-600 bg-green-600/20"
-                        : "border-gray-800 bg-black/30 hover:border-gray-600"
+                      "w-full rounded-xl border p-3 text-left transition",
+                      active ? "border-green-600 bg-green-600/20" : "border-gray-800 bg-black/30 hover:border-gray-600"
                     )}
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="font-semibold">{bg.title}</div>
-                        <div className="text-sm text-gray-300">{bg.desc}</div>
-                        </div>
-
-                      <div className="h-16 w-24 overflow-hidden rounded-lg border border-gray-800 bg-black/40">
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-16 shrink-0 overflow-hidden rounded-lg border border-gray-700 bg-black/40">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={bg.thumb}
-                          alt={bg.title}
-                          className="h-full w-full object-cover"
-                        />
+                        <img src={bg.thumb} alt={bg.title} className="h-full w-full object-cover" />
                       </div>
+                      <div>
+                        <div className="font-semibold text-sm">{bg.title}</div>
+                        <div className="text-xs text-gray-400">{bg.desc}</div>
+                      </div>
+                      {active && <div className="ml-auto h-3 w-3 rounded-full bg-green-500 shrink-0" />}
                     </div>
                   </button>
                 );
@@ -309,17 +309,12 @@ export default function UploadPage() {
           </section>
         </div>
 
-        {/* Gerar */}
+        {/* ── STEP 3: Generate ── */}
         <section className="mt-6 rounded-2xl border border-gray-800 bg-white/5 p-6">
-          <div className="flex flex-col gap-2">
-            <h2 className="text-lg font-semibold">3) Gerar</h2>
-            <p className="text-sm text-gray-300">
-              Clique para iniciar a geração das suas fotos profissionais.
-            </p>
-          </div>
+          <h2 className="text-lg font-semibold">3) Gerar</h2>
 
           {error && (
-            <div className="mt-4 rounded-xl border border-red-600/40 bg-red-600/10 px-4 py-3 text-sm text-red-200">
+            <div className="mt-4 rounded-xl border border-red-600/40 bg-red-600/10 px-4 py-3 text-sm text-red-300">
               {error}
             </div>
           )}
@@ -330,105 +325,87 @@ export default function UploadPage() {
               onClick={createJob}
               disabled={isBusy}
               className={cn(
-                "rounded-xl px-6 py-3 font-semibold transition",
-                isBusy
-                  ? "cursor-not-allowed bg-gray-700 text-gray-300"
-                  : "bg-green-500 text-black hover:bg-green-400"
+                "rounded-xl px-7 py-3 font-semibold transition text-sm",
+                isBusy ? "cursor-not-allowed bg-gray-700 text-gray-400" : "bg-green-500 text-black hover:bg-green-400"
               )}
             >
-              {isWorking
-                ? "Trabalhando..."
-                : job?.status === "queued"
-                ? "Na fila..."
-                : job?.status === "processing"
-                ? "Processando..."
-                : "Gerar 4 variações"}
+              {isWorking           ? "Enviando…"
+                : job?.status === "queued"     ? "Na fila…"
+                : job?.status === "processing" ? "Gerando…"
+                : "✨ Gerar 4 variações"}
             </button>
 
             <button
               type="button"
               onClick={resetAll}
-              className="rounded-xl border border-gray-700 bg-black/30 px-6 py-3 text-sm text-gray-200 hover:border-gray-500"
+              className="rounded-xl border border-gray-700 bg-black/30 px-6 py-3 text-sm text-gray-300 hover:border-gray-500 transition"
             >
               Resetar
             </button>
 
-            {jobId && (
-              <span className="text-xs text-gray-400">
-                Job: <span className="text-gray-200">{jobId}</span>
-              </span>
-            )}
+            <span className="text-xs text-gray-500">
+              Estilo: <span className="text-gray-300">{selectedBgObj.title}</span>
+              {files.length > 0 && <> · {files.length} foto{files.length > 1 ? "s" : ""}</>}
+            </span>
           </div>
 
-          {/* Progresso */}
+          {/* Progress bar */}
           <div className="mt-5">
-            <div className="flex items-center justify-between text-xs text-gray-400">
-              <span>Status: {statusLabel(job?.status)}</span>
+            <div className="flex items-center justify-between text-xs text-gray-400 mb-1.5">
+              <span>{statusLabel(job?.status)}</span>
               <span>{progress}%</span>
             </div>
-            <div className="mt-2 h-3 w-full overflow-hidden rounded-full border border-gray-800 bg-black/40">
+            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-800">
               <div
-                className="h-full bg-green-500 transition-all"
+                className="h-full rounded-full bg-green-500 transition-all duration-500"
                 style={{ width: `${progress}%` }}
               />
             </div>
           </div>
 
-          {/* Resultados */}
+          {/* Results */}
           <div className="mt-6">
-            <h3 className="text-sm font-semibold text-gray-200">Resultados</h3>
-
             {job?.status !== "done" ? (
-              <div className="mt-2 rounded-xl border border-gray-800 bg-black/30 p-4 text-sm text-gray-400">
-                Quando finalizar, você verá 4 imagens aqui.
+              <div className="rounded-xl border border-gray-800 bg-black/20 p-6 text-center text-sm text-gray-500">
+                As 4 variações aparecerão aqui quando a geração terminar.
               </div>
             ) : (
-              <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {(job.resultUrls || []).map((url, idx) => (
-                  <div
-                    key={`${url}-${idx}`}
-                    className="overflow-hidden rounded-xl border border-gray-800 bg-black/40"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={url}
-                      alt={`Resultado ${idx + 1}`}
-                      className="h-48 w-full object-cover"
-                    />
-
-                    <div className="flex items-center justify-between gap-2 px-3 py-2">
-                      <div className="text-xs text-gray-400">
-                        Resultado {idx + 1}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <a
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-md border border-gray-700 bg-black/30 px-2 py-1 text-xs text-gray-200 hover:border-gray-500"
-                        >
-                          Abrir
-                        </a>
-                        <a
-                          href={url}
-                          download
-                          className="rounded-md border border-gray-700 bg-black/30 px-2 py-1 text-xs text-gray-200 hover:border-gray-500"
-                        >
-                          Download
-                        </a>
+              <>
+                <h3 className="text-sm font-semibold text-gray-200 mb-3">Resultados</h3>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {(job.resultUrls || []).map((url, idx) => (
+                    <div key={`${url}-${idx}`} className="overflow-hidden rounded-xl border border-gray-800 bg-black/40">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt={`Resultado ${idx + 1}`} className="h-56 w-full object-cover" />
+                      <div className="flex items-center justify-between gap-2 px-3 py-2">
+                        <span className="text-xs text-gray-400">#{idx + 1}</span>
+                        <div className="flex gap-2">
+                          <a href={url} target="_blank" rel="noreferrer"
+                            className="rounded-md border border-gray-700 bg-black/30 px-2 py-1 text-xs text-gray-200 hover:border-gray-500">
+                            Abrir
+                          </a>
+                          <a href={url} download
+                            className="rounded-md bg-green-600/80 px-2 py-1 text-xs text-white hover:bg-green-500">
+                            ↓ Baixar
+                          </a>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={resetAll}
+                    className="rounded-xl bg-green-500 px-6 py-2 text-sm font-semibold text-black hover:bg-green-400 transition"
+                  >
+                    + Gerar novo headshot
+                  </button>
+                </div>
+              </>
             )}
           </div>
-
-          <div className="mt-4 text-xs text-gray-500">
-            Fundo selecionado: <span className="text-gray-200">{selectedBgObj.title}</span>
-          </div>
         </section>
+
       </div>
     </main>
   );
