@@ -38,7 +38,7 @@ export async function submitHeadshotJob(
       num_images: 4,
       guidance_scale: 7.5,       // higher = more prompt-accurate, better face control
       num_inference_steps: 50,
-      style_strength_ratio: 35,  // lower = more identity preservation (default is 20, max 50)
+      style_strength: 35,  // lower = more identity preservation (default is 20, max 50)
     },
   });
 
