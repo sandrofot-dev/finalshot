@@ -4,17 +4,24 @@ fal.config({ credentials: process.env.FAL_KEY });
 
 const MODEL = "fal-ai/photomaker";
 
-// Trigger word "img" tells PhotoMaker which faces are the reference
+// "img" is the PhotoMaker trigger word — must be in the prompt
+// Prompts are optimized for face consistency and realism
 const PROMPTS: Record<string, string> = {
-  corporativo:  "img, professional corporate office background, natural light, high-end business environment, realistic depth of field, sharp focus, 4k",
-  startup:      "img, modern startup office, glass walls, creative workspace, cinematic lighting, professional headshot, 4k",
-  empresa:      "img, corporate environment with blurred people in background, shallow depth of field, professional headshot, 4k",
-  executivo:    "img, dark executive portrait background, dramatic lighting, high-end CEO look, professional headshot, 4k",
-  minimalista:  "img, clean white studio background, soft lighting, professional LinkedIn headshot, 4k",
+  corporativo:
+    "a photo of img person, professional corporate headshot, elegant office background with bookshelves, soft natural window light, sharp face, studio quality, 4k, photorealistic",
+  startup:
+    "a photo of img person, professional headshot, modern tech office background with glass walls, soft bokeh, contemporary lighting, sharp face, studio quality, 4k, photorealistic",
+  empresa:
+    "a photo of img person, professional business portrait, office environment background with out-of-focus colleagues far behind, deep depth of field on face, sharp face, studio quality, 4k, photorealistic",
+  executivo:
+    "a photo of img person, executive business portrait, dark solid background, dramatic professional lighting, confident CEO look, sharp face, studio quality, 4k, photorealistic",
+  minimalista:
+    "a photo of img person, professional LinkedIn headshot, clean white studio background, soft even lighting, centered composition, sharp face, studio quality, 4k, photorealistic",
 };
 
+// Strong negative prompt to prevent the most common PhotoMaker artifacts
 const NEGATIVE =
-  "distorted, deformed, ugly, blurry, low quality, bad anatomy, extra limbs, cartoon, anime, painting, watermark";
+  "duplicate person, duplicate face, same person twice, person in background, ugly, deformed, distorted face, blurry face, bad anatomy, extra limbs, cartoon, anime, painting, watermark, text, artifacts, glitch, noise, overexposed, underexposed, bad proportions, disfigured, mutated, low quality, worst quality, jpeg artifacts";
 
 export async function submitHeadshotJob(
   uploadUrl: string,
@@ -29,8 +36,9 @@ export async function submitHeadshotJob(
       negative_prompt: NEGATIVE,
       style: "Photographic",
       num_images: 4,
-      guidance_scale: 5,
+      guidance_scale: 7.5,       // higher = more prompt-accurate, better face control
       num_inference_steps: 50,
+      style_strength_ratio: 35,  // lower = more identity preservation (default is 20, max 50)
     },
   });
 
@@ -53,7 +61,6 @@ export async function checkHeadshotJob(requestId: string): Promise<FalStatus> {
     return { status: "done", progress: 100, resultUrls };
   }
 
-  // IN_QUEUE or IN_PROGRESS (FAILED surfaces as a thrown exception from the SDK)
   const queuePos = status.status === "IN_QUEUE" ? (status.queue_position ?? 0) : 0;
   const progress = status.status === "IN_PROGRESS" ? 60 : Math.max(10, 50 - queuePos * 10);
 
