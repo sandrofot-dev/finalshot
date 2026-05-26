@@ -8,60 +8,63 @@ const GEN_MODEL   = "fal-ai/flux-lora";
 // Trigger word embedded in prompts — must match what was used in training
 const TRIGGER = "TOK";
 
+// Quality suffix appended to every prompt — controls sharpness and realism
+const Q = "highly detailed face, sharp focus, crisp skin texture, detailed eyes, professional photography, 8k uhd, photorealistic";
+
 const PROMPTS: Record<string, string> = {
   // ── Corporativo ──────────────────────────────────────────────────────────
   corporativo:
-    `professional corporate headshot of ${TRIGGER}, elegant office with bookshelves in background, soft natural window light, business attire, sharp face, photorealistic, 4k`,
+    `professional corporate headshot of ${TRIGGER}, elegant office with bookshelves softly blurred in background, natural window light, navy blue business suit, white dress shirt, ${Q}`,
   executivo:
-    `executive business portrait of ${TRIGGER}, dark solid background, dramatic professional studio lighting, formal business attire, confident expression, sharp face, photorealistic, 4k`,
+    `executive business portrait of ${TRIGGER}, pure dark charcoal seamless background, dramatic professional studio lighting with subtle rim light, navy blue suit, white dress shirt, ${Q}`,
   sala_reuniao:
-    `professional headshot of ${TRIGGER}, modern conference room with panoramic city-view windows softly blurred in background, business attire, bright natural lighting, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, modern conference room with panoramic city windows softly blurred in background, bright natural lighting, business suit, ${Q}`,
   lobby:
-    `professional headshot of ${TRIGGER}, luxurious corporate lobby with marble floors and warm pendant lights softly blurred in background, premium business attire, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, luxurious corporate lobby marble floors warm lighting softly blurred in background, premium business suit, ${Q}`,
 
   // ── Profissional ─────────────────────────────────────────────────────────
   minimalista:
-    `professional LinkedIn headshot of ${TRIGGER}, clean white studio background, soft even lighting, centered composition, business casual, sharp face, photorealistic, 4k`,
+    `professional LinkedIn headshot of ${TRIGGER}, clean bright white studio seamless background, soft even frontal lighting, business casual attire, ${Q}`,
   cinza:
-    `professional studio portrait of ${TRIGGER}, smooth neutral gray seamless backdrop, soft professional studio lighting with subtle rim highlight, business attire, sharp face, photorealistic, 4k`,
+    `professional studio portrait of ${TRIGGER}, smooth neutral mid-gray seamless backdrop, three-point professional studio lighting subtle rim highlight, business suit, ${Q}`,
   azul:
-    `professional headshot of ${TRIGGER}, deep navy blue gradient background, elegant professional studio lighting, business attire, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, deep navy blue gradient seamless background, elegant professional studio lighting, business suit, ${Q}`,
   degradê:
-    `professional headshot of ${TRIGGER}, premium dark charcoal to warm gray gradient background, dramatic studio lighting, formal business attire, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, premium dark charcoal to warm gray gradient seamless background, dramatic studio lighting, formal business suit, ${Q}`,
 
   // ── Tech / Startup ───────────────────────────────────────────────────────
   startup:
-    `professional headshot of ${TRIGGER}, modern tech office background with glass walls and soft bokeh, business casual attire, bright cinematic lighting, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, modern tech office glass walls and open plan softly blurred in background, business casual smart attire, bright cinematic lighting, ${Q}`,
   coworking:
-    `professional headshot of ${TRIGGER}, contemporary coworking space with exposed brick walls and lush plants softly blurred in background, smart casual attire, natural light, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, contemporary coworking space exposed brick walls lush green plants softly blurred in background, smart casual attire, natural daylight, ${Q}`,
   tecnologia:
-    `professional headshot of ${TRIGGER}, dark high-tech server room with glowing blue LED ambient lighting in background, business casual, sharp face, cinematic blue-toned lighting, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, dark high-tech environment with glowing blue LED ambient lighting blurred background, business casual, cinematic blue rim lighting, ${Q}`,
 
   // ── Empresarial ──────────────────────────────────────────────────────────
   empresa:
-    `professional business portrait of ${TRIGGER}, blurred office environment far in background, colleagues out of focus, business attire, sharp face, photorealistic, 4k`,
+    `professional business portrait of ${TRIGGER}, busy modern office environment with colleagues softly blurred far in background, business suit, ${Q}`,
 
   // ── Externo ──────────────────────────────────────────────────────────────
   cidade:
-    `professional headshot of ${TRIGGER}, blurred urban city skyline at golden hour with bokeh lights in background, business attire, warm cinematic rim lighting, sharp face, photorealistic, 4k`,
+    `professional outdoor headshot of ${TRIGGER}, urban city skyline at golden hour with bokeh lights softly blurred in background, business suit, warm cinematic rim light, ${Q}`,
   jardim:
-    `professional headshot of ${TRIGGER}, lush green garden with blooming flowers softly blurred in background, light business casual attire, soft natural daylight, sharp face, photorealistic, 4k`,
+    `professional outdoor headshot of ${TRIGGER}, lush green garden with flowers and foliage softly blurred in background, smart business casual attire, soft natural daylight, ${Q}`,
   arquitetura:
-    `professional headshot of ${TRIGGER}, modern glass and steel architectural facade softly blurred in background, business attire, bright even daylight, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, modern glass and steel architectural facade softly blurred in background, business suit, crisp even daylight, ${Q}`,
 
   // ── Criativo ─────────────────────────────────────────────────────────────
   biblioteca:
-    `professional headshot of ${TRIGGER}, classic library with tall wooden bookshelves of books softly blurred in background, business casual attire, warm library lighting, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, classic library with towering wooden bookshelves softly blurred in background, business casual attire, warm ambient library lighting, ${Q}`,
   cafe:
-    `professional headshot of ${TRIGGER}, upscale coffee shop with warm bokeh pendant lights in background, smart casual attire, warm ambient lighting, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, upscale cafe warm bokeh pendant lights and wooden decor softly blurred in background, smart casual attire, warm ambient lighting, ${Q}`,
   arte:
-    `professional headshot of ${TRIGGER}, contemporary art gallery with white walls and colorful paintings softly blurred in background, chic business attire, gallery lighting, sharp face, photorealistic, 4k`,
+    `professional headshot of ${TRIGGER}, contemporary art gallery white walls and colorful artworks softly blurred in background, chic business attire, gallery lighting, ${Q}`,
 
   // ── Premium ──────────────────────────────────────────────────────────────
   luxo:
-    `premium professional headshot of ${TRIGGER}, luxury hotel suite with soft golden tones and elegant decor in background, premium formal attire, soft cinematic lighting, sharp face, photorealistic, 4k`,
+    `premium professional headshot of ${TRIGGER}, luxury hotel suite with chandeliers and golden tones softly blurred in background, premium formal business suit, cinematic lighting, ${Q}`,
   dourado:
-    `premium executive headshot of ${TRIGGER}, warm golden hour sunlight from the side, rich golden bokeh background, luxury formal attire, sharp face, photorealistic, 4k`,
+    `premium executive headshot of ${TRIGGER}, warm golden hour side light, rich golden bokeh background, luxury formal suit, ${Q}`,
 };
 
 const NEGATIVE =
@@ -77,7 +80,7 @@ export async function submitTrainingJob(zipUrl: string): Promise<string> {
       images_data_url: zipUrl,
       trigger_word: TRIGGER,
       create_masks: true,   // face segmentation masks for better identity learning
-      steps: 1000,
+      steps: 1500,          // was 1000 — more steps = sharper face recall
     },
   });
   return request_id;
@@ -110,18 +113,20 @@ export async function submitGenerationJob(
   background: string
 ): Promise<string> {
   const prompt = PROMPTS[background] ?? PROMPTS.executivo;
-  const seeds  = [42, 137, 2024, 8888];
+
+  // 6 seeds → 6 diverse variations to maximise the chance of a great shot
+  const seeds = [42, 137, 2024, 8888, 512, 7777];
 
   const results = await Promise.all(
     seeds.map((seed) =>
       fal.queue.submit(GEN_MODEL, {
         input: {
           prompt,
-          loras: [{ path: loraUrl, scale: 0.85 }],
+          loras: [{ path: loraUrl, scale: 1.0 }],   // 1.0 = max face fidelity
           num_images: 1,
-          image_size: "portrait_4_3",
-          num_inference_steps: 28,
-          guidance_scale: 3.5,
+          image_size: "portrait_4_3",                // 768×1024 portrait
+          num_inference_steps: 40,                   // was 28 — more detail
+          guidance_scale: 7.0,                       // was 3.5 — THIS fixes the blur
           seed,
           enable_safety_checker: false,
         },

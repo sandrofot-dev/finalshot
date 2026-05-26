@@ -754,11 +754,11 @@ export default function UploadPage() {
               <div className="text-4xl mb-2">🎉</div>
               <h2 className="text-2xl font-bold">Seus headshots estão prontos!</h2>
               <p className="text-gray-400 text-sm mt-1">
-                {generationJob.resultUrls?.length ?? 4} fotos geradas · estilo &ldquo;{selectedBgObj.title}&rdquo;
+                {generationJob.resultUrls?.length ?? 6} fotos geradas · estilo &ldquo;{selectedBgObj.title}&rdquo;
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
               {(generationJob.resultUrls || []).map((url, idx) => (
                 <div key={`${url}-${idx}`} className="overflow-hidden rounded-2xl border border-gray-800 bg-black/40">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
